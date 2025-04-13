@@ -8,42 +8,20 @@
             font-family: Arial, sans-serif;
             padding: 20px;
         }
-
-        h2 {
-            margin-bottom: 10px;
-        }
-
-        #userCount {
-            font-weight: bold;
-            color: #2e8b57;
-        }
-
+        h2 { margin-bottom: 10px; }
+        #userCount { font-weight: bold; color: #2e8b57; }
         #chat {
-            width: 100%;
-            height: 300px;
+            width: 100%; height: 300px;
             border: 1px solid #ccc;
             padding: 10px;
             overflow-y: scroll;
             background: #f9f9f9;
             white-space: pre-wrap;
         }
-
-        #chat .system {
-            color: gray;
-        }
-
-        #chat .self {
-            color: green;
-        }
-
-        #chat .other {
-            color: blue;
-        }
-
-        input, button {
-            padding: 5px;
-            margin: 5px 0;
-        }
+        #chat .system { color: gray; }
+        #chat .self { color: green; }
+        #chat .other { color: blue; }
+        input, button { padding: 5px; margin: 5px 0; }
     </style>
 </head>
 <body>
@@ -59,6 +37,7 @@
 <div id="chat"></div>
 <br>
 <input type="text" id="message" placeholder="输入消息"/>
+<input type="text" id="targetNickname" placeholder="私聊对象昵称（留空=群聊）"/>
 <button onclick="send()">发送</button>
 
 <script>
@@ -74,27 +53,52 @@
         location.reload();
     }
     nicknameInput.value = nickname;
-    nicknameInput.disabled = true; // 禁用昵称输入框，不能改动    nicknameInput.value = nickname;
+    nicknameInput.disabled = true;
+
     const socket = new WebSocket("ws://localhost:8080/chat?nickname=" + encodeURIComponent(nickname));
 
     socket.onmessage = function (event) {
         console.log("收到消息：", event.data);
         const data = JSON.parse(event.data);
 
+        // 普通群聊消息
         if (data.type === "chat") {
-            if (data.nickname === nickname) {
-                return; // 自己发的，忽略（已经本地显示了）
-            }
-            const content = "[" + data.createTime + "] " + data.nickname + "：" + data.message;
-            appendMessage(content, "other");
-        } else if (data.type === "system") {
+            const content = `[${data.createTime}] ${data.nickname}：${data.message}`;
+            appendMessage(content, data.nickname === nickname ? "self" : "other");
+        }
+
+        // 系统消息
+        else if (data.type === "system") {
             appendMessage(data.content, "system");
-        } else if (data.type === "userCount") {
+        }
+
+        // 在线人数更新
+        else if (data.type === "userCount") {
             userCountSpan.textContent = data.content;
-        } else if (data.type === "userList") {
+        }
+
+        // 在线用户列表更新
+        else if (data.type === "userList") {
             updateUserList(data.users);
         }
+
+        // 私聊消息
+        else if (data.type === "private") {
+            // 1. 自己发出的消息，已经本地显示过，直接忽略
+            if (data.fromUser === nickname) {
+                return;
+            }
+
+            // 2. 如果是发给自己的，才显示
+            if (data.toUser === nickname) {
+                const displayMessage = `[${data.time}] 私聊来自 ${data.fromUser}：${data.content}`;
+                appendMessage(displayMessage, "other");
+            }
+
+            // 3. 发给其他人的私聊，什么都不做，直接忽略
+        }
     };
+
 
     function updateUserList(users) {
         userListUl.innerHTML = "";
@@ -106,23 +110,40 @@
     }
 
     function send() {
+        const nickname = nicknameInput.value.trim();
         const message = messageInput.value.trim();
+        const targetNickname = document.getElementById("targetNickname").value.trim();
+
+        if (!nickname) {
+            alert("请先输入昵称！");
+            return;
+        }
         if (!message) {
             return;
         }
+
         const time = new Date().toLocaleTimeString();
         const payload = {
-            type: "chat",
+            type: targetNickname ? "private" : "chat",
+            from: nickname,
+            to: targetNickname,
             time: time,
-            nickname: nickname,   // 只用全局变量，不用 input 框
-            message: message
+            content: message
         };
-        socket.send(JSON.stringify(payload)); // 发送消息到服务器
-        const localContent = "[" + time + "] " + nickname + "：" + message;
-        appendMessage(localContent, "self"); // 本地显示
+
+        socket.send(JSON.stringify(payload));
+
+        // 本地显示自己消息
+        let displayMessage;
+        if (targetNickname) {
+            displayMessage = `[${time}] 私聊给 ${targetNickname}：${message}`;
+        } else {
+            displayMessage = `[${time}] ${nickname}：${message}`;
+        }
+        appendMessage(displayMessage, "self");
+
         messageInput.value = "";
     }
-
 
     function appendMessage(message, type) {
         const div = document.createElement("div");

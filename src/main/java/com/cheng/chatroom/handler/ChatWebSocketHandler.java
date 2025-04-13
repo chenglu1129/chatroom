@@ -1,5 +1,6 @@
 package com.cheng.chatroom.handler;
 
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.cheng.chatroom.entity.ChatMessage;
@@ -26,27 +27,37 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    public void handleTextMessage(WebSocketSession session, TextMessage textMessage) throws Exception {
-        String json = textMessage.getPayload();
-        // 反序列化 JSON
-        JSONObject jsonObject = JSONObject.parseObject(json);
-        // 解析 JSON 内容：[时间] 昵称：消息
-        String type = jsonObject.getString("type");
-        String timePart = jsonObject.getString("time");
-        String nickname = jsonObject.getString("nickname");
-        String message = jsonObject.getString("message");
+    public void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        JSONObject json = JSON.parseObject(message.getPayload());
+        String type = json.getString("type");
 
-        // 保存数据库
-        ChatMessage chatMessage = new ChatMessage();
-        chatMessage.setType(type);
-        chatMessage.setNickname(nickname);
-        chatMessage.setMessage(message);
-        chatMessage.setCreateTime(timePart);
-        chatMessageService.save(chatMessage);
+        ChatMessage chatMsg = new ChatMessage();
+        chatMsg.setFromUser(json.getString("from"));
+        chatMsg.setToUser(json.getString("to"));
+        chatMsg.setContent(json.getString("content"));
+        chatMsg.setTime(json.getString("time"));
+        chatMsg.setType(json.getString("type"));
 
-        // 继续广播
-        broadcastChatMessage(json);
+        if ("chat".equals(type)) {
+            // 群发消息
+            broadcastChatMessage(message.getPayload());
+        } else if ("private".equals(type)) {
+            String to = json.getString("to");
+            sendPrivateMessage(json, to, session);
+        }
+        chatMessageService.saveChatMessage(chatMsg); // 保存
     }
+    //私信
+    private void sendPrivateMessage(JSONObject json, String to, WebSocketSession sender) throws Exception {
+        String messageStr = JSON.toJSONString(json);
+        for (WebSocketSession s : sessions) {
+            String nick = (String) s.getAttributes().get("nickname");
+            if (nick != null && (nick.equals(to) || s == sender)) {
+                s.sendMessage(new TextMessage(messageStr));
+            }
+        }
+    }
+
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {

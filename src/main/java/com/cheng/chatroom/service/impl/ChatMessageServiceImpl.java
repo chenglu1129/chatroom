@@ -8,4 +8,14 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class ChatMessageServiceImpl extends ServiceImpl<ChatMessageMapper, ChatMessage> implements ChatMessageService {
+    private final ChatMessageMapper chatMessageMapper;
+
+    public ChatMessageServiceImpl(ChatMessageMapper chatMessageMapper) {
+        this.chatMessageMapper = chatMessageMapper;
+    }
+
+    @Override
+    public void saveChatMessage(ChatMessage message) {
+        chatMessageMapper.insert(message);
+    }
 }
