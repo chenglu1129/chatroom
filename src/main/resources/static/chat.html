@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>简易聊天室</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        h2 {
+            margin-bottom: 10px;
+        }
+
+        #userCount {
+            font-weight: bold;
+            color: #2e8b57;
+        }
+
+        #chat {
+            width: 100%;
+            height: 300px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            overflow-y: scroll;
+            background: #f9f9f9;
+            white-space: pre-wrap;
+        }
+
+        #chat .system {
+            color: gray;
+        }
+
+        #chat .self {
+            color: green;
+        }
+
+        #chat .other {
+            color: blue;
+        }
+
+        input, button {
+            padding: 5px;
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+
+<h2>聊天室</h2>
+<div>在线人数：<span id="userCount">0</span> 人</div>
+<div>在线用户：
+    <ul id="userList"></ul>
+</div>
+
+<input type="text" id="nickname" placeholder="请输入昵称"/>
+<br>
+<div id="chat"></div>
+<br>
+<input type="text" id="message" placeholder="输入消息"/>
+<button onclick="send()">发送</button>
+
+<script>
+    const nicknameInput = document.getElementById("nickname");
+    const messageInput = document.getElementById("message");
+    const chatBox = document.getElementById("chat");
+    const userCountSpan = document.getElementById("userCount");
+    const userListUl = document.getElementById("userList");
+
+    let nickname = prompt("请输入你的昵称：");
+    if (!nickname) {
+        alert("昵称不能为空！");
+        location.reload();
+    }
+    nicknameInput.value = nickname;
+    nicknameInput.disabled = true; // 禁用昵称输入框，不能改动    nicknameInput.value = nickname;
+    const socket = new WebSocket("ws://localhost:8080/chat?nickname=" + encodeURIComponent(nickname));
+
+    socket.onmessage = function (event) {
+        console.log("收到消息：", event.data);
+        const data = JSON.parse(event.data);
+
+        if (data.type === "chat") {
+            if (data.nickname === nickname) {
+                return; // 自己发的，忽略（已经本地显示了）
+            }
+            const content = "[" + data.createTime + "] " + data.nickname + "：" + data.message;
+            appendMessage(content, "other");
+        } else if (data.type === "system") {
+            appendMessage(data.content, "system");
+        } else if (data.type === "userCount") {
+            userCountSpan.textContent = data.content;
+        } else if (data.type === "userList") {
+            updateUserList(data.users);
+        }
+    };
+
+    function updateUserList(users) {
+        userListUl.innerHTML = "";
+        users.forEach(function (user) {
+            const li = document.createElement("li");
+            li.textContent = user;
+            userListUl.appendChild(li);
+        });
+    }
+
+    function send() {
+        const message = messageInput.value.trim();
+        if (!message) {
+            return;
+        }
+        const time = new Date().toLocaleTimeString();
+        const payload = {
+            type: "chat",
+            time: time,
+            nickname: nickname,   // 只用全局变量，不用 input 框
+            message: message
+        };
+        socket.send(JSON.stringify(payload)); // 发送消息到服务器
+        const localContent = "[" + time + "] " + nickname + "：" + message;
+        appendMessage(localContent, "self"); // 本地显示
+        messageInput.value = "";
+    }
+
+
+    function appendMessage(message, type) {
+        const div = document.createElement("div");
+        div.className = type;
+        div.textContent = message;
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+</script>
+
+</body>
+</html>
