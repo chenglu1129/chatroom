@@ -1,159 +1,237 @@
 package com.cheng.chatroom.handler;
 
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.cheng.chatroom.entity.ChatMessage;
 import com.cheng.chatroom.service.ChatMessageService;
 import org.springframework.stereotype.Component;
-import org.springframework.web.socket.CloseStatus;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.*;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * WebSocket消息处理器
+ * 处理所有WebSocket连接和消息
+ */
 @Component
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
-    private final Set<WebSocketSession> sessions = ConcurrentHashMap.newKeySet();
+    // 使用线程安全的Set保存所有活跃的WebSocket会话
+    private static final Set<WebSocketSession> sessions = ConcurrentHashMap.newKeySet();
 
     private final ChatMessageService chatMessageService;
+
+    // 构造器注入服务
     public ChatWebSocketHandler(ChatMessageService chatMessageService) {
         this.chatMessageService = chatMessageService;
     }
 
+    /**
+     * 处理文本消息
+     * @param session 当前会话
+     * @param message 收到的消息
+     */
     @Override
-    public void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         JSONObject json = JSON.parseObject(message.getPayload());
         String type = json.getString("type");
 
+        // 构建消息实体
         ChatMessage chatMsg = new ChatMessage();
-        chatMsg.setFromUser(json.getString("from"));
-        chatMsg.setToUser(json.getString("to"));
+        chatMsg.setFromUser(json.getString("fromUser"));
+        chatMsg.setToUser(json.getString("toUser"));
         chatMsg.setContent(json.getString("content"));
-        chatMsg.setTime(json.getString("time"));
-        chatMsg.setType(json.getString("type"));
+        chatMsg.setTime(new Date());
+        chatMsg.setType(type);
+        chatMsg.setMsgType(json.getString("msgType"));
+        chatMsg.setFileUrl(json.getString("fileUrl"));
+        chatMsg.setFileSize(json.getLong("fileSize"));
 
-        if ("chat".equals(type)) {
-            // 群发消息
-            broadcastChatMessage(message.getPayload());
-        } else if ("private".equals(type)) {
-            String to = json.getString("to");
-            sendPrivateMessage(json, to, session);
+        try {
+            // 根据消息类型处理
+            switch (type) {
+                case "chat":  // 群聊消息
+                    broadcastChatMessage(message.getPayload());
+                    break;
+                case "private":  // 私聊消息
+                    sendPrivateMessage(json, session);
+                    break;
+                case "history":  // 历史消息请求
+                    handleHistoryRequest(session, json);
+                    return;  // 历史消息单独处理，不需要保存
+                default:
+                    throw new IllegalArgumentException("未知的消息类型: " + type);
+            }
+
+            // 保存消息到数据库
+            chatMessageService.saveChatMessage(chatMsg);
+        } catch (Exception e) {
+            // 发送错误消息给客户端
+            session.sendMessage(new TextMessage(buildErrorMessage(e.getMessage())));
         }
-        chatMessageService.saveChatMessage(chatMsg); // 保存
     }
-    //私信
-    private void sendPrivateMessage(JSONObject json, String to, WebSocketSession sender) throws Exception {
-        String messageStr = JSON.toJSONString(json);
-        for (WebSocketSession s : sessions) {
-            String nick = (String) s.getAttributes().get("nickname");
-            if (nick != null && (nick.equals(to) || s == sender)) {
-                s.sendMessage(new TextMessage(messageStr));
+
+    /**
+     * 处理历史消息请求
+     * @param session 当前会话
+     * @param payload 请求参数
+     */
+    private void handleHistoryRequest(WebSocketSession session, JSONObject payload) throws Exception {
+        int page = payload.getIntValue("page", 1);
+        int size = payload.getIntValue("size", 20);
+        String filter = payload.getString("filter");
+        String nickname = (String) session.getAttributes().get("nickname");
+
+        // 创建分页对象
+        Page<ChatMessage> pageParam = new Page<>(page, size);
+        IPage<ChatMessage> resultPage = chatMessageService.getHistory(pageParam, filter, nickname);
+
+        // 构建响应
+        JSONObject response = new JSONObject();
+        response.put("type", "history");
+        response.put("messages", resultPage.getRecords());
+        response.put("total", resultPage.getTotal());
+        response.put("currentPage", resultPage.getCurrent());
+
+        session.sendMessage(new TextMessage(response.toJSONString()));
+    }
+
+    /**
+     * 发送私聊消息
+     * @param message 消息内容
+     * @param sender 发送者会话
+     */
+    private void sendPrivateMessage(JSONObject message, WebSocketSession sender) throws Exception {
+        String fromUser = message.getString("fromUser");
+        String toUser = message.getString("toUser");
+        String content = message.toJSONString();
+
+        for (WebSocketSession session : sessions) {
+            String nickname = (String) session.getAttributes().get("nickname");
+            // 发送给接收者或发送者自己（用于回显）
+            if (session.isOpen() && (toUser.equals(nickname) || fromUser.equals(nickname))) {
+                session.sendMessage(new TextMessage(content));
             }
         }
     }
 
-
-    @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        sessions.add(session);
-
-        // 获取昵称参数
-        String nickname = getNickname(session);
-        if (nickname != null) {
-            session.getAttributes().put("nickname", nickname);
+    /**
+     * 广播群聊消息
+     * @param message 消息内容
+     */
+    private void broadcastChatMessage(String message) throws Exception {
+        for (WebSocketSession session : sessions) {
+            if (session.isOpen()) {
+                session.sendMessage(new TextMessage(message));
+            }
         }
-
-        sendHistoryToUser(session);
-        broadcastUserCount();
-        broadcastUserList(); // 广播在线用户列表
-        broadcastSystemMessage("有新用户加入");
     }
 
-    private String getNickname(WebSocketSession session) {
-        String query = session.getUri().getQuery(); // nickname=xxx
+    /**
+     * 广播在线用户列表
+     */
+    private void broadcastUserList() throws Exception {
+        List<String> nicknames = new ArrayList<>();
+        for (WebSocketSession session : sessions) {
+            String nickname = (String) session.getAttributes().get("nickname");
+            if (nickname != null) {
+                nicknames.add(nickname);
+            }
+        }
+
+        JSONObject message = new JSONObject();
+        message.put("type", "userList");
+        message.put("users", nicknames);
+
+        broadcastChatMessage(message.toJSONString());
+    }
+
+    /**
+     * 广播在线人数
+     */
+    private void broadcastUserCount() throws Exception {
+        JSONObject message = new JSONObject();
+        message.put("type", "userCount");
+        message.put("count", sessions.size());
+
+        broadcastChatMessage(message.toJSONString());
+    }
+
+    /**
+     * 构建错误消息
+     * @param errorMsg 错误信息
+     * @return JSON格式的错误消息
+     */
+    private String buildErrorMessage(String errorMsg) {
+        JSONObject error = new JSONObject();
+        error.put("type", "error");
+        error.put("message", errorMsg);
+        return error.toJSONString();
+    }
+
+    /**
+     * 连接建立后触发
+     */
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        // 获取并保存昵称
+        String nickname = extractNicknameFromSession(session);
+        session.getAttributes().put("nickname", nickname);
+
+        sessions.add(session);
+
+        // 通知所有用户
+        broadcastUserCount();
+        broadcastUserList();
+        broadcastSystemMessage(nickname + " 加入了聊天室");
+    }
+
+    /**
+     * 连接关闭后触发
+     */
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        String nickname = (String) session.getAttributes().get("nickname");
+        sessions.remove(session);
+
+        // 通知所有用户
+        broadcastUserCount();
+        broadcastUserList();
+        broadcastSystemMessage(nickname + " 离开了聊天室");
+    }
+
+    /**
+     * 从session中提取昵称
+     */
+    private String extractNicknameFromSession(WebSocketSession session) {
+        String query = session.getUri().getQuery();
         if (query != null && query.startsWith("nickname=")) {
             return query.substring("nickname=".length());
         }
         return "匿名用户";
     }
 
-    private void broadcastUserList() throws Exception {
-        List<String> nicknames = new ArrayList<>();
-        for (WebSocketSession s : sessions) {
-            Object nick = s.getAttributes().get("nickname");
-            if (nick != null) {
-                nicknames.add(nick.toString());
-            }
-        }
-
-        // 构造 JSON 消息
-        JSONObject messageJson = new JSONObject();
-        messageJson.put("type", "userList");
-        messageJson.put("users", JSONArray.from(nicknames));
-
-        String message = messageJson.toJSONString();
-
-        for (WebSocketSession s : sessions) {
-            if (s.isOpen()) {
-                s.sendMessage(new TextMessage(message));
-            }
-        }
-    }
-
-
-    @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        sessions.remove(session);
-        broadcastUserCount();
-        broadcastUserList(); // 更新用户列表
-        broadcastSystemMessage("有用户离开");
-    }
-
-
-    // 发送历史记录给新用户
-    private void sendHistoryToUser(WebSocketSession session) throws Exception {
-        List<ChatMessage> messages = chatMessageService.list();
-        for (ChatMessage msg : messages) {
-//            String content = "[" + msg.getCreateTime() + "] " + msg.getNickname() + "：" + msg.getMessage();
-            String json = JSONObject.toJSONString(msg);
-            session.sendMessage(new TextMessage(json));
-        }
-    }
-
-
-    // 广播在线人数
-    private void broadcastUserCount() throws Exception {
-        String message = "{\"type\":\"userCount\", \"content\":\"" + sessions.size() + "\"}";
-        for (WebSocketSession s : sessions) {
-            if (s.isOpen()) {
-                s.sendMessage(new TextMessage(message));
-            }
-        }
-    }
-
-    // 广播系统消息
+    /**
+     * 广播系统消息
+     */
     private void broadcastSystemMessage(String content) throws Exception {
-        String message = "{\"type\":\"system\", \"content\":\"【系统消息】：" + content + "，当前在线人数：" + sessions.size() + "\"}";
-        for (WebSocketSession s : sessions) {
-            if (s.isOpen()) {
-                s.sendMessage(new TextMessage(message));
-            }
-        }
+        JSONObject message = new JSONObject();
+        message.put("type", "system");
+        message.put("content", content);
+        message.put("time", new Date().toString());
+
+        broadcastChatMessage(message.toJSONString());
     }
 
-    // 广播聊天消息
-    private void broadcastChatMessage(String message) throws Exception {
-//        String json = "{\"type\":\"chat\", \"content\":\"" + message + "\"}";
-        for (WebSocketSession s : sessions) {
-            if (s.isOpen()) {
-                s.sendMessage(new TextMessage(message));
-            }
-        }
+    /**
+     * 处理传输错误
+     */
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
+//        log.error("WebSocket传输错误: ", exception);
+        session.close(CloseStatus.SERVER_ERROR);
     }
 }

@@ -1,9 +1,56 @@
+# 应用基础配置
 spring:
+  # 数据源配置
   datasource:
     url: jdbc:mysql://192.168.0.102:3306/chat?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
     username: root
     password: root
+    # Hikari连接池配置
+    hikari:
+      connection-timeout: 30000  # 连接超时时间(毫秒)
+      maximum-pool-size: 20      # 最大连接数
+      minimum-idle: 5           # 最小空闲连接
+      idle-timeout: 600000      # 空闲连接超时时间(毫秒)
+      max-lifetime: 1800000     # 连接最大生命周期(毫秒)
 
+  # WebSocket心跳配置
+  websocket:
+    heartbeat:
+      interval: 30000  # 心跳间隔(毫秒)
+      timeout: 10000   # 心跳超时时间(毫秒)
+
+  # Jackson JSON配置
+  jackson:
+    time-zone: Asia/Shanghai  # 时区设置
+    date-format: yyyy-MM-dd HH:mm:ss  # 日期格式
+
+# 服务器配置
+server:
+  port: 8080  # 服务端口
+  servlet:
+    context-path: /api  # 上下文路径
+  compression:
+    enabled: true  # 开启响应压缩
+
+# MyBatis-Plus配置
 mybatis-plus:
-  mapper-locations: classpath:/mapper/*.xml
-  type-aliases-package: com.cheng.chatroom.entity
+  mapper-locations: classpath:/mapper/*.xml  # Mapper文件位置
+  type-aliases-package: com.cheng.chatroom.entity  # 实体类包路径
+  configuration:
+    map-underscore-to-camel-case: true  # 开启下划线转驼峰
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl  # SQL日志输出
+  global-config:
+    db-config:
+      id-type: auto  # ID自增
+      logic-delete-field: deleted  # 逻辑删除字段名
+      logic-delete-value: 1       # 逻辑删除值
+      logic-not-delete-value: 0   # 逻辑未删除值
+
+# 日志配置
+logging:
+  level:
+    root: info  # 全局日志级别
+    com.cheng.chatroom: debug  # 项目包日志级别
+file:
+  upload-dir: E:\1\chatFile\upload
+  access-path: E:\1\chatFile\access
